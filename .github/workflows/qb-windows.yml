@@ -148,10 +148,11 @@ jobs:
         env:
           OMP_NUM_THREADS: 1,2,1
         run: |
+          set +e +o pipefail
           pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null
           cd _build/test
           for t in tblite optimization; do
-            echo "=== $t, by hand"; ./crest-tester.exe "$t" 2>&1 | tail -8; echo "exit $?"
+            echo "=== $t, by hand"; ./crest-tester.exe "$t" > "by-hand-$t.log" 2>&1; echo "exit $?"; grep -v '^#[0-9]* *0x' "by-hand-$t.log" | tail -6
             echo "=== $t, OMP_NUM_THREADS=1"; OMP_NUM_THREADS=1 ./crest-tester.exe "$t" 2>&1 | tail -4
             echo "=== $t, OMP_STACKSIZE=1G"; OMP_STACKSIZE=1G ./crest-tester.exe "$t" 2>&1 | tail -4
             echo "=== $t, gdb without the debug heap"
