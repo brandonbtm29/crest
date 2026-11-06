@@ -114,7 +114,14 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: cmake --build _build --parallel 4
+        # static: only CREST and its unit-test program; the C++ test programs of the gfnff and libpvol
+        # subprojects do not link statically (libgcc_eh), which is why upstream's static CI has no tests
+        run: |
+          if [ "${{ matrix.link }}" = static ]; then
+            cmake --build _build --parallel 4 --target crest-exe crest-tester
+          else
+            cmake --build _build --parallel 4
+          fi
 
       - name: The Windows code paths were compiled in
         shell: msys2 {0}
@@ -134,7 +141,7 @@ jobs:
           OMP_NUM_THREADS: 1,2,1
         run: ctest --test-dir _build --output-on-failure --parallel 2 -R '^crest/'
 
-      - name: Backtraces of failing unit tests (gdb)
+      - name: Failing unit tests run by hand, and under gdb
         if: steps.ctest.outcome == 'failure'
         continue-on-error: true
         shell: msys2 {0}
@@ -142,22 +149,25 @@ jobs:
           OMP_NUM_THREADS: 1,2,1
         run: |
           pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null
-          cd _build
-          for t in tblite gfnff optimization; do
-            echo "=== $t"
-            gdb -q -batch -ex run -ex bt -ex 'info threads' --args test/crest-tester.exe "$t" 2>&1 | grep -v '^\[New Thread\|^\[Thread' | tail -45
+          cd _build/test
+          for t in tblite optimization; do
+            echo "=== $t, by hand"; ./crest-tester.exe "$t" 2>&1 | tail -8; echo "exit $?"
+            echo "=== $t, OMP_NUM_THREADS=1"; OMP_NUM_THREADS=1 ./crest-tester.exe "$t" 2>&1 | tail -4
+            echo "=== $t, OMP_STACKSIZE=1G"; OMP_STACKSIZE=1G ./crest-tester.exe "$t" 2>&1 | tail -4
+            echo "=== $t, gdb without the debug heap"
+            _NO_DEBUG_HEAP=1 gdb -q -batch -ex run -ex bt --args ./crest-tester.exe "$t" 2>&1 | grep -v '^\[New Thread\|^\[Thread' | tail -40
           done
 
       - name: Package
         shell: msys2 {0}
         run: |
           set -e
-          cmake --install _build
           pkg="$PWD/crest-windows-${{ matrix.link }}"
           mkdir -p "$pkg"
-          cp _dist/bin/crest.exe COPYING COPYING.LESSER "$pkg/"
+          strip -o "$pkg/crest.exe" _build/crest.exe   # without the -g debug info (72 MB)
+          cp COPYING COPYING.LESSER "$pkg/"
           if [ "${{ matrix.link }}" = shared ]; then
-            ldd _dist/bin/crest.exe | awk '/\/ucrt64\// {print $3}' | sort -u | xargs -r -I{} cp {} "$pkg/"
+            ldd _build/crest.exe | awk '/\/ucrt64\// {print $3}' | sort -u | xargs -r -I{} cp {} "$pkg/"
           fi
           echo "imports of crest.exe:"
           objdump -p "$pkg/crest.exe" | grep 'DLL Name'

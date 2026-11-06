@@ -94,8 +94,15 @@ a few legacy failure paths. On Windows `command()` now calls `crest_win_command(
 
 - `rm [-rf] names...` (with `*`/`?` patterns, several names, directories), `cp [-r]`, `mv`, `mkdir [-p]`
   and `command -v NAME [> file]` run natively (no shell);
-- anything else goes to `cmd.exe` with `/dev/null` -> `NUL`, `cd DIR &&` -> `cd /d DIR &&`, and the
-  program path written with backslashes (cmd.exe reads `/x` as a switch).
+- anything else goes to `cmd.exe` with `/dev/null` -> `NUL`, `a ; b` -> `a & b` (cmd.exe does not split on
+  `;`), `cd DIR &&` -> `cd /d DIR &&`, and the program path written with backslashes (cmd.exe reads `/x`
+  as a switch).
+
+Two legacy-mode problems only showed up in a run (CI, xtb 6.7.1): `-gfn2//gfnff` optimizes each structure
+with `xtb --opt (GFN-FF) ; xtb --sp (GFN2)` in one command line, and without the `;` translation the GFN2
+single point never ran (the ensemble kept GFN-FF energies, -2.116 instead of -17.728 Eh); and
+`trialMD_legacy`'s `gettime` left `TRIALMD/xtb.out` open, which Windows does not let CREST delete
+(`close` added).
 
 Where the commands come from:
 
@@ -103,7 +110,7 @@ Where the commands come from:
 |---|---|---|---|
 | `cleanup.f90:rmrf` (69 calls in cleanup.f90, used everywhere) | `rm -rf NAMES 2>/dev/null` | all, incl. the default iMTD-GC | native |
 | `iomod:checkprog`, `getpath` | `command -v PROG [> pathout.tmp]` | `--legacy`, QCG, turbomole | native |
-| legacy xtb runs (`legacy_algos/*`, `--legacy`, `-gfn2//gfnff`, `-gfn2@...`) | `cd DIR && xtb coord --md ... > xtb.out 2>/dev/null` | `--legacy` and the methods that need it | via cmd.exe translation; needs `xtb.exe` (untested here) |
+| legacy xtb runs (`legacy_algos/*`, `--legacy`, `-gfn2//gfnff`, `-gfn2@...`) | `cd DIR && xtb coord --md ... > xtb.out 2>/dev/null`, `xtb --opt ... ; xtb --sp ...` | `--legacy` and the methods that need it | via cmd.exe translation; needs `xtb.exe`; `-gfn2//gfnff --legacy --alpb water --quick` tested |
 | subprocess calculators (`calculator/xtb_sc.f90`, `orca_sc`, `turbom_sc`, `generic_sc`) | `cd calcspace && BINARY ... > out 2>/dev/null` | TOML input with `type = "xtb"`, `"orca"`, ... | via cmd.exe translation (untested) |
 | QCG (`qcg/solvtool*.f90`) | xtb/xtbiff runs, `cd DIR && ...`, `> out 2> /dev/null` | `--qcg` | via cmd.exe translation (untested; needs xtb, optionally xtbiff) |
 | `scratch.f90` | `mktemp -d`, `scp -r ./* DIR/` | `--scratch` | not ported |
@@ -124,8 +131,8 @@ QuantaBench does.
 | Mode | Needs | Windows |
 |---|---|---|
 | default iMTD-GC, `--quick`, `--sp`, `--ancopt`, `--mdopt`, `--screen`, `--cregen` with GFN2-xTB, GFN1-xTB, GFN0-xTB, GFN-FF (tblite, gfnff, gfn0 in-process), ALPB/GBSA (tblite) | nothing external | built and smoke-tested (see Results) |
-| `--gfn2//gfnff`, `--gfn2@gfnff`, ... | `--legacy`, so the `xtb` program ("option not yet available with new calculator") | translation in place, untested |
-| `--legacy` (any) | `xtb` program | translation in place, untested |
+| `--gfn2//gfnff`, `--gfn2@gfnff`, ... | `--legacy`, so the `xtb` program ("option not yet available with new calculator") | `--gfn2//gfnff --legacy` smoke-tested with xtb 6.7.1; `--gfn2@...` untested |
+| `--legacy` (other run types) | `xtb` program | translation in place, untested |
 | QCG (`--qcg`) | `xtb`, optionally `xtbiff` | translation in place, untested |
 | ORCA/Turbomole/generic calculators | those programs | translation in place, untested |
 | `--scratch`, ConfSolv, MSREACT | POSIX tools | not ported |
@@ -136,6 +143,7 @@ QuantaBench does.
 - `src/iomod.F90`: on `_WIN32`, the C bindings point at `crest_win_*` and `command()` calls
   `crest_win_command()`.
 - `src/algos/ConfSolv.F90`: `cs_kill` instead of the `KILL` intrinsic.
+- `src/legacy_algos/trialmd_legacy.f90`: `gettime` closes its unit.
 - `src/optimize/ancopt.f90`, `rfo.f90`, `printouts.f90`, `algos/search_mecp.f90`,
   `parsing/parse_keyvalue.f90`: missing commas in format strings (gfortran >= 15, all platforms).
 - `CMakeLists.txt`: `_WIN32` for CREST's Fortran sources with gfortran on Windows; link options
