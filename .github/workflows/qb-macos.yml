@@ -1,0 +1,258 @@
+# Native macOS arm64 build of CREST (Homebrew gcc/gfortran + OpenBLAS, not Apple's Accelerate), packaged as
+# a relocatable folder (bin/crest + lib/*.dylib, @rpath, ad-hoc signed), next to a Linux build of the same
+# commit; both run the same smoke cases (.github/qb/smoke.py) and compare.py puts them side by side.
+# See docs/MACOS.md. This workflow belongs to the brandonbtm29/crest fork (branch qb/macos).
+
+name: qb-macos
+
+on:
+  push:
+    branches: ['qb/macos']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SMOKE_THREADS: '3'
+  XTB_VERSION: '6.7.1'
+  PKG: crest-macos-arm64
+
+jobs:
+  macos:
+    name: macos arm64 (Homebrew gfortran, OpenBLAS)
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      # our objects; the bundled Homebrew dylibs carry the runner's own minimum (printed below)
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Toolchain (Homebrew gcc + OpenBLAS)
+        run: |
+          set -e
+          brew install gcc openblas ninja
+          v=$(brew list --versions gcc | awk '{print $2}' | cut -d. -f1)
+          gcc_prefix=$(brew --prefix gcc)
+          echo "FC=$gcc_prefix/bin/gfortran-$v" >> "$GITHUB_ENV"
+          # gcc for C/C++ too: one OpenMP runtime (GCC's libgomp, which Homebrew's OpenBLAS uses as well)
+          echo "CC=$gcc_prefix/bin/gcc-$v" >> "$GITHUB_ENV"
+          echo "CXX=$gcc_prefix/bin/g++-$v" >> "$GITHUB_ENV"
+          echo "OPENBLAS_PREFIX=$(brew --prefix openblas)" >> "$GITHUB_ENV"
+          "$gcc_prefix/bin/gfortran-$v" --version | head -1
+          brew list --versions gcc openblas
+          cmake --version | head -1
+          sw_vers
+          otool -L "$(brew --prefix openblas)/lib/libopenblas.dylib"
+          if otool -L "$(brew --prefix openblas)/lib/libopenblas.dylib" | grep -qE 'libomp\.dylib|libiomp5'; then
+            echo "::error::Homebrew's OpenBLAS links LLVM's OpenMP runtime; CREST uses GCC's libgomp"; exit 1
+          fi
+
+      - name: Configure
+        # BLA_VENDOR=OpenBLAS: without it CMake's FindBLAS/FindLAPACK take Apple's Accelerate before a generic
+        # libblas, as in conda-forge's osx-arm64 crest 3.0.2, whose optimizer then fails (docs/MACOS.md)
+        run: |
+          cmake -B _build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/_dist" \
+            -DBLA_VENDOR=OpenBLAS \
+            -DCMAKE_PREFIX_PATH="$OPENBLAS_PREFIX" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-headerpad_max_install_names" \
+            -DWITH_TESTS=ON 2>&1 | tee configure.log
+          grep -E 'BLAS|LAPACK|openblas|OpenMP' configure.log || true
+
+      - name: Build
+        run: cmake --build _build --parallel 4
+
+      - name: Linked libraries of the build
+        run: |
+          set -e
+          otool -L _build/crest
+          if otool -L _build/crest | grep -q 'Accelerate'; then
+            echo "::error::crest links Apple Accelerate (legacy f2c BLAS ABI: sdot returns a double)"; exit 1
+          fi
+
+      - name: Unit tests (ctest)
+        id: ctest
+        continue-on-error: true
+        env:
+          OMP_NUM_THREADS: 1,2,1
+        run: ctest --test-dir _build --output-on-failure --parallel 2 -R '^crest/'
+
+      - name: Package (relocatable folder)
+        run: |
+          set -e
+          pkg="$PWD/$PKG"
+          rm -rf "$pkg" && mkdir -p "$pkg/bin"
+          strip -o "$pkg/bin/crest" _build/crest
+          python3 -I .github/qb/macos_bundle.py "$pkg/bin/crest" "$pkg/lib"
+          cp COPYING COPYING.LESSER "$pkg/"
+          {
+            cat .github/qb/THIRD-PARTY-NOTICES-macos.txt
+            echo
+            echo "Build"
+            echo "-----"
+            echo "CREST commit: $(git rev-parse HEAD)"
+            echo "Runner: $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)"
+            echo "Compiler: $("$FC" --version | head -1)"
+            echo "Homebrew packages: $(brew list --versions gcc openblas | tr '\n' ' ')"
+            echo "Bundled libraries (lib/):"
+            ls "$pkg/lib" | sed 's/^/  /'
+            echo "Minimum macOS of each file (LC_BUILD_VERSION minos):"
+            for f in "$pkg/bin/crest" "$pkg"/lib/*.dylib; do
+              echo "  $(basename "$f"): $(otool -l "$f" | awk '/LC_BUILD_VERSION/ {b=1} b && /minos/ {print $2; exit}')"
+            done
+            echo
+            git submodule status --recursive
+          } > "$pkg/THIRD-PARTY-NOTICES.txt"
+          tar -C "$PWD" -czf "$PKG.tar.gz" "$PKG"
+          shasum -a 256 "$PKG.tar.gz" | tee "$PKG.tar.gz.sha256"
+          ls -l "$pkg" "$pkg/bin" "$pkg/lib"
+
+      - name: The package runs from another folder without Homebrew's libraries
+        run: |
+          set -e
+          dest="$RUNNER_TEMP/unpacked"
+          rm -rf "$dest" && mkdir -p "$dest"
+          tar -C "$dest" -xzf "$PKG.tar.gz"
+          exe="$dest/$PKG/bin/crest"
+          codesign --verify --verbose=2 "$exe"
+          DYLD_PRINT_LIBRARIES=1 "$exe" --version > version.txt 2> dyld.txt
+          head -20 version.txt
+          sed 's/^dyld\[[0-9]*\]: <[^>]*> //' dyld.txt | grep -v '^/usr/lib/\|^/System/' | sort -u | tee loaded.txt
+          if grep -v "^$dest/$PKG/" loaded.txt | grep -q .; then
+            echo "::error::crest loaded a library from outside its folder:"; grep -v "^$dest/$PKG/" loaded.txt; exit 1
+          fi
+          echo "CREST_EXE=$exe" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: xtb program for the legacy-mode case (conda-forge, optional)
+        id: xtb
+        continue-on-error: true
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: xtb
+          create-args: -c conda-forge xtb=${{ env.XTB_VERSION }}
+          init-shell: none
+
+      - name: Smoke runs (from the unpacked folder)
+        run: |
+          ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" || true
+          extra=()
+          xtb_bin="${MAMBA_ROOT_PREFIX:-}/envs/xtb/bin"
+          if [ -x "$xtb_bin/xtb" ]; then
+            export PATH="$xtb_bin:$PATH" XTBPATH="${MAMBA_ROOT_PREFIX}/envs/xtb/share/xtb"
+            extra=(--legacy-cases)
+          fi
+          python -I .github/qb/smoke.py "$CREST_EXE" "$RUNNER_TEMP/smoke" --threads "$SMOKE_THREADS" \
+            --json "$RUNNER_TEMP/smoke/smoke-macos.json" "${extra[@]}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            ${{ env.PKG }}.tar.gz
+            ${{ env.PKG }}.tar.gz.sha256
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-macos
+          path: |
+            ${{ runner.temp }}/smoke/*.json
+            ${{ runner.temp }}/smoke/*/crest.out
+          retention-days: 30
+
+  linux:
+    name: linux (gcc/gfortran, OpenBLAS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libopenblas-dev cmake ninja-build
+          gfortran --version | head -1
+
+      - name: Configure and build
+        run: |
+          cmake -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/_dist" \
+            -DBLA_VENDOR=OpenBLAS -DWITH_TESTS=OFF
+          cmake --build _build --parallel 4
+          cmake --install _build
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: xtb program for the legacy-mode case (optional)
+        continue-on-error: true
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/xtb.tar.xz" \
+            "https://github.com/grimme-lab/xtb/releases/download/v$XTB_VERSION/xtb-$XTB_VERSION-linux-x86_64.tar.xz"
+          mkdir -p "$RUNNER_TEMP/xtb" && tar xf "$RUNNER_TEMP/xtb.tar.xz" -C "$RUNNER_TEMP/xtb"
+          bin=$(dirname "$(find "$RUNNER_TEMP/xtb" -type f -name xtb | head -1)")
+          "$bin/xtb" --version | grep -i version
+          echo "XTB_BIN=$bin" >> "$GITHUB_ENV"
+          echo "XTBPATH=$(dirname "$bin")/share/xtb" >> "$GITHUB_ENV"
+
+      - name: Smoke runs
+        run: |
+          ulimit -s unlimited || true
+          extra=()
+          if [ -n "$XTB_BIN" ]; then export PATH="$XTB_BIN:$PATH"; extra=(--legacy-cases); fi
+          python -I .github/qb/smoke.py "$PWD/_dist/bin/crest" "$RUNNER_TEMP/smoke" --threads "$SMOKE_THREADS" \
+            --json "$RUNNER_TEMP/smoke/smoke-linux.json" "${extra[@]}"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-linux
+          path: |
+            ${{ runner.temp }}/smoke/*.json
+            ${{ runner.temp }}/smoke/*/crest.out
+          retention-days: 30
+
+  compare:
+    name: compare macOS with Linux
+    needs: [macos, linux]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/qb
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: smoke-*
+          path: smoke
+
+      - name: Compare
+        run: |
+          ls -R smoke | head -50
+          f=smoke/smoke-macos/smoke-macos.json
+          [ -f "$f" ] || { echo "no $f"; exit 1; }
+          echo "## macOS arm64 vs Linux" >> "$GITHUB_STEP_SUMMARY"
+          rc=0
+          python3 -I .github/qb/compare.py smoke/smoke-linux/smoke-linux.json "$f" --md cmp-macos.md || rc=1
+          cat cmp-macos.md >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

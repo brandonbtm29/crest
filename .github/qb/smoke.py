@@ -29,6 +29,11 @@ CASES = {
     "opt_gfn2_alpb": ("pfba", ["--ancopt", "--gfn2", "--alpb", "water"], "energy"),
     "imtdgc_gfnff": ("butanol", ["--gfnff"], "search"),
     "imtdgc_gfn2_alpb_quick": ("pfba", ["--gfn2", "--alpb", "water", "--quick"], "search"),
+    # 20 and 25 atoms: ANCOPT's rational-function step then uses the single-precision Davidson solver
+    # (nvar + 1 >= 50) and BLAS sdot, which a build linked to Apple's Accelerate gets wrong (docs/MACOS.md)
+    "opt_gfn2_davidson": ("tfpgly", ["--ancopt", "--gfn2"], "energy"),
+    "opt_gfnff_alpb_anion": ("pfoa_anion", ["--ancopt", "--gfnff", "--alpb", "water", "--chrg", "-1"], "energy"),
+    "imtdgc_gfnff_quick_davidson": ("tfpgly", ["--gfnff", "--quick"], "search"),
 }
 #: legacy mode runs the xtb program for every MD and optimization (CREST 3.0.2 offers -gfn2//gfnff only
 #: there); these need xtb on PATH and are left out unless --legacy-cases is given
