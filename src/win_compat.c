@@ -30,8 +30,8 @@
  *                       so the RENAME intrinsic ends up here.
  *  crest_win_command    the shell commands CREST passes to system(): rm, cp, mv, mkdir and
  *                       "command -v" run natively; anything else goes to cmd.exe with
- *                       /dev/null -> NUL, "cd DIR &&" -> "cd /d DIR &&" and the program
- *                       path written with backslashes.
+ *                       /dev/null -> NUL, "a ; b" -> "a & b", "cd DIR &&" -> "cd /d DIR &&"
+ *                       and the program path written with backslashes.
  */
 
 #ifdef _WIN32
@@ -369,7 +369,8 @@ static int is_native(const char *cmd)
   return 0;
 }
 
-/* write cmd for cmd.exe: /dev/null -> NUL, "cd DIR" -> "cd /d DIR", program paths with backslashes */
+/* write cmd for cmd.exe: /dev/null -> NUL, "a ; b" -> "a & b", "cd DIR" -> "cd /d DIR", and program
+ * paths with backslashes */
 static void translate(const char *cmd, char *out, size_t size)
 {
   size_t o = 0;
@@ -386,6 +387,12 @@ static void translate(const char *cmd, char *out, size_t size)
     if (strncmp(p, "&&", 2) == 0) {
       out[o++] = *p++;
       out[o++] = *p++;
+      at_start = 1;
+      continue;
+    }
+    if (*p == ';') { /* POSIX "a ; b" is "a & b" in cmd.exe (which passes ";" on as an argument) */
+      out[o++] = '&';
+      p++;
       at_start = 1;
       continue;
     }

@@ -170,6 +170,7 @@ contains
         call readl(tmp2,floats,n)
       end if
     end do
+    close (ich) !> an open unit keeps Windows from deleting TRIALMD/xtb.out later
     secs = secs+floats(2)*86400.0d0  !days to seconds
     secs = secs+floats(3)*3600.0d0   !hours to seconds
     secs = secs+floats(4)*60.0d0     !minutes to seconds
