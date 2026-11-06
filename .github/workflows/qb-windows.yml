@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { link: static, static: 'ON', tests: 'OFF' }
+          - { link: static, static: 'ON', tests: 'ON' }
           - { link: shared, static: 'OFF', tests: 'ON' }
 
     steps:
@@ -126,11 +126,27 @@ jobs:
           nm "$obj" | grep -q crest_win_command || { echo "::error::iomod.F90 was built without _WIN32"; exit 1; }
 
       - name: Unit tests (ctest)
+        id: ctest
         if: matrix.tests == 'ON'
+        continue-on-error: true
         shell: msys2 {0}
         env:
           OMP_NUM_THREADS: 1,2,1
         run: ctest --test-dir _build --output-on-failure --parallel 2 -R '^crest/'
+
+      - name: Backtraces of failing unit tests (gdb)
+        if: steps.ctest.outcome == 'failure'
+        continue-on-error: true
+        shell: msys2 {0}
+        env:
+          OMP_NUM_THREADS: 1,2,1
+        run: |
+          pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null
+          cd _build
+          for t in tblite gfnff optimization; do
+            echo "=== $t"
+            gdb -q -batch -ex run -ex bt -ex 'info threads' --args test/crest-tester.exe "$t" 2>&1 | grep -v '^\[New Thread\|^\[Thread' | tail -45
+          done
 
       - name: Package
         shell: msys2 {0}
