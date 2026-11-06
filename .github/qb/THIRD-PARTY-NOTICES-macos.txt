@@ -3,8 +3,8 @@ CREST for macOS (arm64): licenses of the included components
 
 This bin/crest was built by the brandonbtm29/crest fork (branch qb/macos, workflow
 .github/workflows/qb-macos.yml) from upstream crest-lab/crest master plus the changes described
-in docs/WINDOWS.md and docs/MACOS.md, with Homebrew's GCC/gfortran and OpenBLAS on a GitHub-hosted
-macOS runner. It is not an official CREST release.
+in docs/WINDOWS.md and docs/MACOS.md, with conda-forge's compilers (clang, gfortran), OpenBLAS and
+LLVM OpenMP on a GitHub-hosted macOS runner. It is not an official CREST release.
 
 CREST itself
 ------------
@@ -24,16 +24,18 @@ dependencies tblite fetches at its pinned revisions):
 - dftd4 (https://github.com/dftd4/dftd4): LGPL-3.0-or-later
 - s-dftd3 (https://github.com/dftd3/simple-dftd3): LGPL-3.0-or-later
 
-Libraries in lib/ (shared libraries, unmodified from Homebrew bottles except for their install
-names, rpaths and ad-hoc code signatures; exact versions below).
-Sources: https://github.com/Homebrew/homebrew-core (formulae gcc, openblas) and the upstream projects.
-- libgfortran, libgcc_s, libgomp, libstdc++ (GCC runtime libraries, if present):
+Libraries in lib/ (shared libraries, unmodified from conda-forge binary packages except for their
+install names, rpaths and ad-hoc code signatures; exact versions below).
+Sources: https://github.com/conda-forge (feedstocks libgfortran/gfortran_impl, llvm-openmp, openblas)
+and the upstream projects.
+- libgfortran, libgcc_s (GCC runtime libraries):
   GPL-3.0-or-later WITH GCC-exception-3.1 (GCC Runtime Library Exception).
   https://www.gnu.org/licenses/gcc-exception-3.1.html
 - libquadmath (GCC): LGPL-2.1-or-later.
+- libomp (LLVM OpenMP runtime, https://github.com/llvm/llvm-project): Apache-2.0 WITH LLVM-exception.
 - OpenBLAS (https://github.com/OpenMathLib/OpenBLAS): BSD-3-Clause.
 
 Corresponding source: the fork commit named below (CREST plus the qb workflow), the submodule
 revisions recorded in that commit, the dependency revisions in
-subprojects/tblite/config/cmake/Find*.cmake, and the Homebrew formulae above. The workflow
+subprojects/tblite/config/cmake/Find*.cmake, and the conda-forge feedstocks above. The workflow
 rebuilds bin/crest from them.

@@ -1,4 +1,4 @@
-# Native macOS arm64 build of CREST (Homebrew gcc/gfortran + OpenBLAS, not Apple's Accelerate), packaged as
+# Native macOS arm64 build of CREST (conda-forge gfortran + OpenBLAS, not Apple's Accelerate), packaged as
 # a relocatable folder (bin/crest + lib/*.dylib, @rpath, ad-hoc signed), next to a Linux build of the same
 # commit; both run the same smoke cases (.github/qb/smoke.py) and compare.py puts them side by side.
 # See docs/MACOS.md. This workflow belongs to the brandonbtm29/crest fork (branch qb/macos).
@@ -24,38 +24,48 @@ env:
 
 jobs:
   macos:
-    name: macos arm64 (Homebrew gfortran, OpenBLAS)
+    name: macos arm64 (conda-forge gfortran, OpenBLAS)
     runs-on: macos-15
     timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash -el {0}     # login shell: the micromamba environment "build" is active
     env:
-      # our objects; the bundled Homebrew dylibs carry the runner's own minimum (printed below)
+      # our objects; the bundled conda-forge dylibs carry their own minimum (printed below)
       MACOSX_DEPLOYMENT_TARGET: '14.0'
-      HOMEBREW_NO_AUTO_UPDATE: '1'
-      HOMEBREW_NO_INSTALL_CLEANUP: '1'
 
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - name: Toolchain (Homebrew gcc + OpenBLAS)
+      # conda-forge's toolchain, as its crest package uses (gfortran's OpenMP is LLVM's libomp there, and so is
+      # OpenBLAS's: one OpenMP runtime per process), but with OpenBLAS instead of Apple's Accelerate.
+      # (Homebrew's gcc would bring libgomp while Homebrew's OpenBLAS links libomp: two runtimes.)
+      - name: Toolchain (conda-forge compilers, OpenBLAS, LLVM OpenMP)
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: build
+          create-args: >-
+            -c conda-forge
+            c-compiler cxx-compiler fortran-compiler cmake ninja
+            openblas libopenblas=*=openmp* libblas=*=*openblas liblapack=*=*openblas llvm-openmp
+          init-shell: bash
+
+      - name: Toolchain facts
         run: |
           set -e
-          brew install gcc openblas ninja
-          v=$(brew list --versions gcc | awk '{print $2}' | cut -d. -f1)
-          gcc_prefix=$(brew --prefix gcc)
-          echo "FC=$gcc_prefix/bin/gfortran-$v" >> "$GITHUB_ENV"
-          # gcc for C/C++ too: one OpenMP runtime (GCC's libgomp, which Homebrew's OpenBLAS uses as well)
-          echo "CC=$gcc_prefix/bin/gcc-$v" >> "$GITHUB_ENV"
-          echo "CXX=$gcc_prefix/bin/g++-$v" >> "$GITHUB_ENV"
-          echo "OPENBLAS_PREFIX=$(brew --prefix openblas)" >> "$GITHUB_ENV"
-          "$gcc_prefix/bin/gfortran-$v" --version | head -1
-          brew list --versions gcc openblas
-          cmake --version | head -1
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "CONDA_BUILD_SYSROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "CC=$CC CXX=$CXX FC=$FC"
+          "$FC" --version | head -1
+          "$CC" --version | head -1
+          micromamba list -n build | grep -E '^\s*(gfortran|libgfortran|clang|llvm-openmp|libopenblas|openblas|libblas|liblapack|cmake) ' || true
           sw_vers
-          otool -L "$(brew --prefix openblas)/lib/libopenblas.dylib"
-          if otool -L "$(brew --prefix openblas)/lib/libopenblas.dylib" | grep -qE 'libomp\.dylib|libiomp5'; then
-            echo "::error::Homebrew's OpenBLAS links LLVM's OpenMP runtime; CREST uses GCC's libgomp"; exit 1
+          ls -l "$CONDA_PREFIX"/lib/libopenblas*.dylib "$CONDA_PREFIX"/lib/lib*omp*.dylib
+          otool -L "$CONDA_PREFIX/lib/libopenblas.dylib"
+          if otool -L "$CONDA_PREFIX/lib/libopenblas.dylib" | grep -q 'libgomp'; then
+            echo "::error::OpenBLAS links GCC's libgomp; this build uses LLVM's libomp"; exit 1
           fi
 
       - name: Configure
@@ -66,8 +76,10 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$PWD/_dist" \
             -DBLA_VENDOR=OpenBLAS \
-            -DCMAKE_PREFIX_PATH="$OPENBLAS_PREFIX" \
-            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-headerpad_max_install_names" \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
+            -DCMAKE_FIND_FRAMEWORK=NEVER \
+            -DCMAKE_EXE_LINKER_FLAGS="${LDFLAGS:-} -Wl,-headerpad_max_install_names" \
             -DWITH_TESTS=ON 2>&1 | tee configure.log
           grep -E 'BLAS|LAPACK|openblas|OpenMP' configure.log || true
 
@@ -80,6 +92,9 @@ jobs:
           otool -L _build/crest
           if otool -L _build/crest | grep -q 'Accelerate'; then
             echo "::error::crest links Apple Accelerate (legacy f2c BLAS ABI: sdot returns a double)"; exit 1
+          fi
+          if otool -L _build/crest | grep -q 'libgomp'; then
+            echo "::error::crest links libgomp next to OpenBLAS's libomp (two OpenMP runtimes)"; exit 1
           fi
 
       - name: Unit tests (ctest)
@@ -105,7 +120,8 @@ jobs:
             echo "CREST commit: $(git rev-parse HEAD)"
             echo "Runner: $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)"
             echo "Compiler: $("$FC" --version | head -1)"
-            echo "Homebrew packages: $(brew list --versions gcc openblas | tr '\n' ' ')"
+            echo "conda-forge packages:"
+            micromamba list -n build | grep -E '^\s*(gfortran_impl|libgfortran|libgcc|llvm-openmp|libopenblas|clang) ' | sed 's/^/  /'
             echo "Bundled libraries (lib/):"
             ls "$pkg/lib" | sed 's/^/  /'
             echo "Minimum macOS of each file (LC_BUILD_VERSION minos):"
@@ -119,9 +135,10 @@ jobs:
           shasum -a 256 "$PKG.tar.gz" | tee "$PKG.tar.gz.sha256"
           ls -l "$pkg" "$pkg/bin" "$pkg/lib"
 
-      - name: The package runs from another folder without Homebrew's libraries
+      - name: The package runs from another folder, outside the build environment
         run: |
           set -e
+          micromamba deactivate || true
           dest="$RUNNER_TEMP/unpacked"
           rm -rf "$dest" && mkdir -p "$dest"
           tar -C "$dest" -xzf "$PKG.tar.gz"
@@ -140,16 +157,12 @@ jobs:
           python-version: '3.12'
 
       - name: xtb program for the legacy-mode case (conda-forge, optional)
-        id: xtb
         continue-on-error: true
-        uses: mamba-org/setup-micromamba@v2
-        with:
-          environment-name: xtb
-          create-args: -c conda-forge xtb=${{ env.XTB_VERSION }}
-          init-shell: none
+        run: micromamba create -y -n xtb -c conda-forge "xtb=$XTB_VERSION"
 
-      - name: Smoke runs (from the unpacked folder)
+      - name: Smoke runs (from the unpacked folder, outside the build environment)
         run: |
+          micromamba deactivate || true
           ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" || true
           extra=()
           xtb_bin="${MAMBA_ROOT_PREFIX:-}/envs/xtb/bin"

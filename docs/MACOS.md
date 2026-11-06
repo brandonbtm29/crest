@@ -37,13 +37,15 @@ successfully optimized") looks like the same thing; it has no diagnosis yet.
 
 `qb-macos.yml` (push to `qb/macos`, or run it by hand):
 
-- `macos-15` runner (arm64), Homebrew `gcc` (gfortran, and gcc/g++ for the C/C++ parts) and `openblas`;
-  `-DBLA_VENDOR=OpenBLAS`, so Accelerate is never considered (the job fails if `crest` links it).
-  OpenMP is GCC's libgomp throughout (Homebrew's OpenBLAS is built with GCC and uses it too): one OpenMP
-  runtime per process; the job fails if OpenBLAS links LLVM's `libomp`.
+- `macos-15` runner (arm64) with conda-forge's compilers (clang, gfortran), OpenBLAS (OpenMP variant) and
+  LLVM OpenMP from micromamba: the toolchain conda-forge's own `crest` package is built with, plus
+  `-DBLA_VENDOR=OpenBLAS`, so Accelerate is never considered (the job fails if `crest` links it). OpenMP is
+  LLVM's libomp throughout (conda-forge's gfortran uses it for `-fopenmp`, and so does its OpenBLAS): one
+  OpenMP runtime per process; the job fails if libgomp shows up. Homebrew does not fit: its gcc brings
+  libgomp, while its OpenBLAS links libomp (two runtimes in one process).
 - `.github/qb/macos_bundle.py` turns the build into a folder that runs from anywhere:
-  `crest-macos-arm64/bin/crest` and `lib/` with the non-system dylibs it loads (libgfortran, libgomp,
-  libquadmath, libgcc_s, OpenBLAS), install names `@rpath/...`, rpath `@loader_path/../lib`, ad-hoc
+  `crest-macos-arm64/bin/crest` and `lib/` with the non-system dylibs it loads (libgfortran, libquadmath,
+  libgcc_s, libomp, OpenBLAS), install names `@rpath/...`, rpath `@loader_path/../lib`, ad-hoc
   signatures. The job unpacks the tarball elsewhere and fails if dyld loads any library from outside
   the folder (`DYLD_PRINT_LIBRARIES`).
 - Unit tests (`ctest -R crest/`), then the smoke cases of `.github/qb/smoke.py` from the unpacked
