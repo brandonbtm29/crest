@@ -21,6 +21,7 @@ env:
   CREST_REPO: brandonbtm29/crest
   CREST_REF: ${{ github.repository == 'brandonbtm29/crest' && github.sha || 'qb/windows' }}
   SMOKE_THREADS: '2'
+  XTB_VERSION: '6.7.1'
 
 jobs:
   windows:
@@ -160,13 +161,29 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: xtb program for the legacy-mode case (optional)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'xtb.zip'
+          Invoke-WebRequest -Uri "https://github.com/grimme-lab/xtb/releases/download/v$env:XTB_VERSION/xtb-$($env:XTB_VERSION)pre-windows-x86_64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\xtb"
+          $exe = Get-ChildItem "$env:RUNNER_TEMP\xtb" -Recurse -Filter xtb.exe | Select-Object -First 1
+          Get-ChildItem $exe.DirectoryName | Select-Object Name, Length
+          & $exe.FullName --version | Select-String -Pattern 'version'
+          "XTB_BIN=$($exe.DirectoryName)" | Add-Content $env:GITHUB_ENV
+          $share = Get-ChildItem "$env:RUNNER_TEMP\xtb" -Recurse -Directory -Filter xtb | Where-Object { $_.Parent.Name -eq 'share' } | Select-Object -First 1
+          if ($share) { "XTBPATH=$($share.FullName)" | Add-Content $env:GITHUB_ENV }
+
       - name: Smoke runs (from the packaged folder, outside MSYS2)
         shell: pwsh
         run: |
           $exe = Join-Path $PWD 'crest-windows-${{ matrix.link }}\crest.exe'
           & $exe --version
+          $extra = @()
+          if ($env:XTB_BIN) { $env:PATH = "$env:XTB_BIN;$env:PATH"; $extra = @('--legacy-cases') }
           python -I .github/qb/smoke.py $exe "$env:RUNNER_TEMP\smoke" --threads $env:SMOKE_THREADS `
-            --json "$env:RUNNER_TEMP\smoke\smoke-windows-${{ matrix.link }}.json"
+            --json "$env:RUNNER_TEMP\smoke\smoke-windows-${{ matrix.link }}.json" @extra
           exit $LASTEXITCODE
 
       - uses: actions/upload-artifact@v7
@@ -217,12 +234,25 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: xtb program for the legacy-mode case (optional)
+        continue-on-error: true
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/xtb.tar.xz" \
+            "https://github.com/grimme-lab/xtb/releases/download/v$XTB_VERSION/xtb-$XTB_VERSION-linux-x86_64.tar.xz"
+          mkdir -p "$RUNNER_TEMP/xtb" && tar xf "$RUNNER_TEMP/xtb.tar.xz" -C "$RUNNER_TEMP/xtb"
+          bin=$(dirname "$(find "$RUNNER_TEMP/xtb" -type f -name xtb | head -1)")
+          "$bin/xtb" --version | grep -i version
+          echo "XTB_BIN=$bin" >> "$GITHUB_ENV"
+          echo "XTBPATH=$(dirname "$bin")/share/xtb" >> "$GITHUB_ENV"
+
       - name: Smoke runs
         run: |
           ulimit -s unlimited || true
           _dist/bin/crest --version
+          extra=()
+          if [ -n "$XTB_BIN" ]; then export PATH="$XTB_BIN:$PATH"; extra=(--legacy-cases); fi
           python -I .github/qb/smoke.py "$PWD/_dist/bin/crest" "$RUNNER_TEMP/smoke" --threads "$SMOKE_THREADS" \
-            --json "$RUNNER_TEMP/smoke/smoke-linux.json"
+            --json "$RUNNER_TEMP/smoke/smoke-linux.json" "${extra[@]}"
 
       - uses: actions/upload-artifact@v7
         if: always()

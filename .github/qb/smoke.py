@@ -30,6 +30,13 @@ CASES = {
     "imtdgc_gfnff": ("butanol", ["--gfnff"], "search"),
     "imtdgc_gfn2_alpb_quick": ("pfba", ["--gfn2", "--alpb", "water", "--quick"], "search"),
 }
+#: legacy mode runs the xtb program for every MD and optimization (CREST 3.0.2 offers -gfn2//gfnff only
+#: there); these need xtb on PATH and are left out unless --legacy-cases is given
+LEGACY_CASES = {
+    "legacy_gfn2gfnff_alpb_quick": ("butanol", ["--gfn2//gfnff", "--legacy", "--alpb", "water", "--quick"],
+                                    "search"),
+}
+CASES.update(LEGACY_CASES)
 
 ENERGY_RE = re.compile(r"TOTAL ENERGY\s+(-?\d+\.\d+)")
 
@@ -97,7 +104,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("crest")
     ap.add_argument("out_dir")
     ap.add_argument("--threads", type=int, default=2)
-    ap.add_argument("--cases", default=",".join(CASES))
+    ap.add_argument("--cases", default=",".join(k for k in CASES if k not in LEGACY_CASES))
+    ap.add_argument("--legacy-cases", action="store_true",
+                    help="also run the legacy-mode cases (xtb program on PATH); their failures are reported only")
     ap.add_argument("--timeout", type=float, default=1800)
     ap.add_argument("--json", default="")
     a = ap.parse_args(argv)
@@ -108,12 +117,22 @@ def main(argv: list[str] | None = None) -> int:
     summary = {"crest": exe, "platform": sys.platform, "version": (version.stdout + version.stderr).strip()[-2000:],
                "cases": []}
     ok = True
-    for name in a.cases.split(","):
-        r = run_case(exe, name.strip(), root, a.threads, a.timeout)
+    names = [n.strip() for n in a.cases.split(",") if n.strip()]
+    if a.legacy_cases:
+        names += [n for n in LEGACY_CASES if n not in names]
+        xtb = shutil.which("xtb")
+        summary["xtb"] = xtb
+        if xtb:
+            v = subprocess.run([xtb, "--version"], capture_output=True, text=True, errors="replace")
+            summary["xtb_version"] = next((ln.strip() for ln in (v.stdout + v.stderr).splitlines()
+                                           if "version" in ln.lower()), "")
+    for name in names:
+        r = run_case(exe, name, root, a.threads, a.timeout)
+        r["optional"] = name in LEGACY_CASES
         summary["cases"].append(r)
         good = r["exit"] == 0 and r["normal_termination"] and (r.get("energy") is not None or
                                                                 (r.get("n_conformers") or 0) > 0)
-        ok &= good
+        ok &= good or r["optional"]
         brief = {k: r[k] for k in ("exit", "seconds", "energy", "n_conformers", "lowest_energy") if k in r}
         print(f"{'ok  ' if good else 'FAIL'} {name}: {brief}", flush=True)
         if not good:

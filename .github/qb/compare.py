@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-TOL = {"sp": 1e-8, "opt": 1e-6, "imtdgc": 1e-4}  # Eh
+TOL = {"sp": 1e-8, "opt": 1e-6, "imtdgc": 1e-4, "legacy": 1e-4}  # Eh
 
 
 def tol_for(case: str) -> float:
@@ -44,11 +44,11 @@ def main(argv: list[str] | None = None) -> int:
         er, eo = r.get(key), o.get(key)
         de = abs(er - eo) if er is not None and eo is not None else None
         ok = r["exit"] == 0 and o["exit"] == 0 and de is not None and de <= tol_for(r["case"])
-        ok_all &= ok
+        ok_all &= ok or bool(r.get("optional"))
         nr, no = r.get("n_conformers", ""), o.get("n_conformers", "")
         rows.append(f"| {r['case']} | {r['exit']} | {o['exit']} | {er} | {eo} | "
                     f"{'' if de is None else f'{de:.1e}'} | {nr} | {no} | {r['seconds']} | {o['seconds']} | "
-                    f"{'yes' if ok else 'NO'} |")
+                    f"{'yes' if ok else 'NO'}{' (optional)' if r.get('optional') else ''} |")
         left_r, left_o = set(r["files_left"]), set(o["files_left"])
         if left_r != left_o:
             rows.append(f"|  files only in ref: {sorted(left_r - left_o)}; only in other: "
