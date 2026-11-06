@@ -146,7 +146,10 @@ jobs:
           codesign --verify --verbose=2 "$exe"
           DYLD_PRINT_LIBRARIES=1 "$exe" --version > version.txt 2> dyld.txt
           head -20 version.txt
-          sed 's/^dyld\[[0-9]*\]: <[^>]*> //' dyld.txt | grep -v '^/usr/lib/\|^/System/' | sort -u | tee loaded.txt
+          # loaded images are the "dyld[pid]: <UUID> /path" lines (macOS 15 also prints "move loaded to delayed")
+          grep -E '^dyld\[[0-9]+\]: <[^>]*> /' dyld.txt | sed 's/^dyld\[[0-9]*\]: <[^>]*> //' \
+            | grep -v '^/usr/lib/\|^/System/' | sort -u | tee loaded.txt
+          [ -s loaded.txt ] || { echo "::error::no library loads seen in DYLD_PRINT_LIBRARIES output"; exit 1; }
           if grep -v "^$dest/$PKG/" loaded.txt | grep -q .; then
             echo "::error::crest loaded a library from outside its folder:"; grep -v "^$dest/$PKG/" loaded.txt; exit 1
           fi
