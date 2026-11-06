@@ -8,6 +8,7 @@ name: qb-macos
 on:
   push:
     branches: ['qb/macos']
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 permissions:
@@ -119,7 +120,7 @@ jobs:
             echo "-----"
             echo "CREST commit: $(git rev-parse HEAD)"
             echo "Runner: $(sw_vers -productName) $(sw_vers -productVersion) $(uname -m)"
-            echo "Compiler: $("$FC" --version | head -1)"
+            echo "Compiler: $("${FC:-gfortran}" --version 2>&1 | head -1)"
             echo "conda-forge packages:"
             micromamba list -n build | grep -E '^\s*(gfortran_impl|libgfortran|libgcc|llvm-openmp|libopenblas|clang) ' | sed 's/^/  /'
             echo "Bundled libraries (lib/):"
