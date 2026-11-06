@@ -63,9 +63,9 @@ jobs:
           set -e
           gfortran --version | head -1
           cmake --version | head -1
-          echo "gfortran predefines on this target:"
           echo "" > empty.F90
-          gfortran -cpp -dM -E empty.F90 | grep -E '_WIN32|__MINGW64__' || { echo "::error::_WIN32 is not predefined for Fortran"; exit 1; }
+          # gfortran predefines no OS macro; CMakeLists.txt defines _WIN32 for CREST's Fortran sources
+          gfortran -cpp -dM -E empty.F90 | grep -E '_WIN32|__MINGW64__' || echo "gfortran predefines neither _WIN32 nor __MINGW64__"
           rm -f empty.F90
           # tblite/CREST link libgomp; a second OpenMP runtime (LLVM's libomp) in one process must be avoided
           objdump -p /ucrt64/bin/libopenblas.dll | grep 'DLL Name'
@@ -114,6 +114,15 @@ jobs:
       - name: Build
         shell: msys2 {0}
         run: cmake --build _build --parallel 4
+
+      - name: The Windows code paths were compiled in
+        shell: msys2 {0}
+        run: |
+          set -e
+          obj=$(find _build -name 'iomod.F90.obj' | head -1)
+          echo "$obj"
+          nm "$obj" | grep -E 'crest_win_(command|mkdir|setenv|symlink|realpath)'
+          nm "$obj" | grep -q crest_win_command || { echo "::error::iomod.F90 was built without _WIN32"; exit 1; }
 
       - name: Unit tests (ctest)
         if: matrix.tests == 'ON'
