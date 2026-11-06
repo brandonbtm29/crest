@@ -37,6 +37,18 @@ if fc_id == 'gcc'
     '-Wno-unused-function',
     language: 'fortran',
   )
+  # Windows (MinGW-w64): POSIX rename() semantics and a larger main-thread stack, as in
+  # CMakeLists.txt (see docs/WINDOWS.md)
+  if host_machine.system() == 'windows'
+    # gfortran does not predefine _WIN32, which the Windows code paths in iomod.F90 test
+    add_project_arguments('-D_WIN32', language: 'fortran')
+    add_project_link_arguments(
+      '-static-libgfortran',
+      '-Wl,--wrap=rename',
+      '-Wl,--stack,1073741824',
+      language: 'fortran',
+    )
+  endif
 elif fc_id == 'intel'
   add_project_link_arguments(
     '-Wl,--allow-multiple-definition',

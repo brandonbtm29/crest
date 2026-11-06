@@ -1,0 +1,43 @@
+CREST for Windows (x86-64): licenses of the included components
+=================================================================
+
+This crest.exe was built by the brandonbtm29/crest fork (branch qb/windows, workflow
+.github/workflows/qb-windows.yml) from upstream crest-lab/crest master plus the Windows
+port described in docs/WINDOWS.md, with the MSYS2 UCRT64 MinGW-w64 GCC/gfortran toolchain
+and OpenBLAS. It is not an official CREST release.
+
+CREST itself
+------------
+CREST: LGPL-3.0-or-later (COPYING, COPYING.LESSER next to this file).
+Source: https://github.com/crest-lab/crest (fork: https://github.com/brandonbtm29/crest)
+
+Built from source and linked into crest.exe (git submodules of CREST, and the CMake
+dependencies tblite fetches at its pinned revisions):
+- tblite (https://github.com/tblite/tblite): LGPL-3.0-or-later
+- gfnff (https://github.com/pprcht/gfnff): LGPL-3.0-or-later
+- gfn0 (https://github.com/pprcht/gfn0): LGPL-3.0-or-later
+- lwoniom (https://github.com/crest-lab/lwoniom): LGPL-3.0-or-later
+- libpvol (https://github.com/neudecker-group/libpvol): LGPL-3.0-or-later
+- toml-f (https://github.com/toml-f/toml-f): Apache-2.0 OR MIT
+- mctc-lib (https://github.com/grimme-lab/mctc-lib): Apache-2.0
+- multicharge (https://github.com/grimme-lab/multicharge): Apache-2.0
+- dftd4 (https://github.com/dftd4/dftd4): LGPL-3.0-or-later
+- s-dftd3 (https://github.com/dftd3/simple-dftd3): LGPL-3.0-or-later
+
+Toolchain runtime and libraries (statically linked in the "static" build, DLLs next to
+crest.exe in the "shared" build), unmodified from MSYS2 UCRT64 binary packages (exact
+versions below). Sources: https://github.com/msys2/MINGW-packages, https://packages.msys2.org/
+- libgfortran, libgcc, libgomp (GCC runtime libraries):
+  GPL-3.0-or-later WITH GCC-exception-3.1 (GCC Runtime Library Exception).
+  https://www.gnu.org/licenses/gcc-exception-3.1.html
+- libquadmath (GCC): LGPL-2.1-or-later.
+- winpthreads (mingw-w64): MIT AND BSD-3-Clause.
+- OpenBLAS (https://github.com/OpenMathLib/OpenBLAS): BSD-3-Clause.
+
+Corresponding source: the fork commit named in the workflow run that produced this file
+(CREST plus the qb workflow), the submodule revisions recorded in that commit, the
+dependency revisions in subprojects/tblite/config/cmake/Find*.cmake, and the MSYS2 package
+sources above. The workflow rebuilds crest.exe from them.
+
+MSYS2 packages used for this build
+----------------------------------

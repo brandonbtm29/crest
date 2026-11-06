@@ -84,6 +84,7 @@ list(APPEND srcs
   "${dir}/trackorigin.f90"
   "${dir}/utilmod.f90"
   "${dir}/wallsetup.f90"
+  "${dir}/win_compat.c"
   "${dir}/zdata.f90"
   "${dir}/ztopology.f90"
 )

@@ -1,0 +1,255 @@
+# Native Windows build of CREST (MSYS2 UCRT64 gcc/gfortran + OpenBLAS), next to a Linux build of the
+# same commit; both run the same smoke cases (.github/qb/smoke.py) and compare.py puts them side by side.
+# See docs/WINDOWS.md. This workflow belongs to the brandonbtm29/crest fork (branch qb/windows); a copy
+# can run from another repository, it then checks out CREST_REPO@CREST_REF.
+
+name: qb-windows
+
+on:
+  push:
+    branches: ['qb/windows', 'ci/crest-windows']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CREST_REPO: brandonbtm29/crest
+  CREST_REF: ${{ github.repository == 'brandonbtm29/crest' && github.sha || 'qb/windows' }}
+  SMOKE_THREADS: '2'
+
+jobs:
+  windows:
+    name: windows (MSYS2 UCRT64, ${{ matrix.link }})
+    runs-on: windows-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { link: static, static: 'ON', tests: 'OFF' }
+          - { link: shared, static: 'OFF', tests: 'ON' }
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.CREST_REPO }}
+          ref: ${{ env.CREST_REF }}
+          submodules: recursive
+
+      - name: MSYS2 UCRT64 toolchain
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-libgomp
+            mingw-w64-ucrt-x86_64-openblas
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Toolchain facts
+        shell: msys2 {0}
+        run: |
+          set -e
+          gfortran --version | head -1
+          cmake --version | head -1
+          echo "gfortran predefines on this target:"
+          echo "" > empty.F90
+          gfortran -cpp -dM -E empty.F90 | grep -E '_WIN32|__MINGW64__' || { echo "::error::_WIN32 is not predefined for Fortran"; exit 1; }
+          rm -f empty.F90
+          # tblite/CREST link libgomp; a second OpenMP runtime (LLVM's libomp) in one process must be avoided
+          objdump -p /ucrt64/bin/libopenblas.dll | grep 'DLL Name'
+          if objdump -p /ucrt64/bin/libopenblas.dll | grep -qiE 'DLL Name: lib(i?omp|omp5)\.dll'; then
+            echo "::error::libopenblas.dll imports LLVM's OpenMP runtime"; exit 1
+          fi
+          ls -l /ucrt64/lib/libopenblas*.a || true
+
+      - name: The Windows CRT's rename() and the replacing one (win_compat.c)
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/rn" && cd "$RUNNER_TEMP/rn"
+          cat > rn.f90 <<'EOF'
+          program rn
+            implicit none
+            integer :: u
+            character(len=8) :: s
+            open (newunit=u,file='rn_a.txt'); write (u,'(a)') 'new'; close (u)
+            open (newunit=u,file='rn_b.txt'); write (u,'(a)') 'old'; close (u)
+            call rename('rn_a.txt','rn_b.txt')
+            open (newunit=u,file='rn_b.txt'); read (u,'(a)') s; close (u)
+            if (trim(s) /= 'new') then
+              print '(a)', 'rename kept the old target'
+              call exit(1)
+            end if
+            print '(a)', 'rename replaced the target'
+          end program rn
+          EOF
+          gcc -c "$GITHUB_WORKSPACE/src/win_compat.c" -o win_compat.o
+          gfortran rn.f90 -o rn_crt.exe
+          ./rn_crt.exe && echo "(plain CRT rename replaced the target)" || echo "(expected: the plain CRT rename does not replace)"
+          gfortran rn.f90 win_compat.o -static-libgfortran -Wl,--wrap=rename -o rn_wrap.exe
+          ./rn_wrap.exe
+
+      - name: Configure
+        shell: msys2 {0}
+        run: >
+          cmake -B _build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX="$PWD/_dist"
+          -DBLA_VENDOR=OpenBLAS
+          -DSTATICBUILD=${{ matrix.static }}
+          -DWITH_TESTS=${{ matrix.tests }}
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build _build --parallel 4
+
+      - name: Unit tests (ctest)
+        if: matrix.tests == 'ON'
+        shell: msys2 {0}
+        env:
+          OMP_NUM_THREADS: 1,2,1
+        run: ctest --test-dir _build --output-on-failure --parallel 2 -R '^crest/'
+
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          set -e
+          cmake --install _build
+          pkg="$PWD/crest-windows-${{ matrix.link }}"
+          mkdir -p "$pkg"
+          cp _dist/bin/crest.exe COPYING COPYING.LESSER "$pkg/"
+          if [ "${{ matrix.link }}" = shared ]; then
+            ldd _dist/bin/crest.exe | awk '/\/ucrt64\// {print $3}' | sort -u | xargs -r -I{} cp {} "$pkg/"
+          fi
+          echo "imports of crest.exe:"
+          objdump -p "$pkg/crest.exe" | grep 'DLL Name'
+          if objdump -p "$pkg/crest.exe" | grep -qiE 'DLL Name: lib(i?omp|omp5)\.dll'; then
+            echo "::error::crest.exe imports LLVM's OpenMP runtime"; exit 1
+          fi
+          {
+            cat .github/qb/THIRD-PARTY-NOTICES.txt
+            pacman -Q | grep -E 'x86_64-(gcc|gcc-fortran|gcc-libs|gcc-libgfortran|libgomp|libwinpthread|winpthreads|openblas|omp|binutils|crt|headers) '
+            echo
+            echo "CREST commit: $(git rev-parse HEAD)"
+            git submodule status --recursive
+          } > "$pkg/THIRD-PARTY-NOTICES.txt"
+          ls -l "$pkg"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Smoke runs (from the packaged folder, outside MSYS2)
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'crest-windows-${{ matrix.link }}\crest.exe'
+          & $exe --version
+          python -I .github/qb/smoke.py $exe "$env:RUNNER_TEMP\smoke" --threads $env:SMOKE_THREADS `
+            --json "$env:RUNNER_TEMP\smoke\smoke-windows-${{ matrix.link }}.json"
+          exit $LASTEXITCODE
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: crest-windows-${{ matrix.link }}
+          path: crest-windows-${{ matrix.link }}/
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-windows-${{ matrix.link }}
+          path: |
+            ${{ runner.temp }}/smoke/*.json
+            ${{ runner.temp }}/smoke/*/crest.out
+          retention-days: 30
+
+  linux:
+    name: linux (gcc/gfortran, OpenBLAS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.CREST_REPO }}
+          ref: ${{ env.CREST_REF }}
+          submodules: recursive
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libopenblas-dev cmake ninja-build
+          gfortran --version | head -1
+
+      - name: Configure and build
+        run: |
+          cmake -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/_dist" \
+            -DBLA_VENDOR=OpenBLAS -DWITH_TESTS=ON
+          cmake --build _build --parallel 4
+          cmake --install _build
+
+      - name: Unit tests (ctest)
+        env:
+          OMP_NUM_THREADS: 1,2,1
+        run: ctest --test-dir _build --output-on-failure --parallel 2 -R '^crest/'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Smoke runs
+        run: |
+          ulimit -s unlimited || true
+          _dist/bin/crest --version
+          python -I .github/qb/smoke.py "$PWD/_dist/bin/crest" "$RUNNER_TEMP/smoke" --threads "$SMOKE_THREADS" \
+            --json "$RUNNER_TEMP/smoke/smoke-linux.json"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-linux
+          path: |
+            ${{ runner.temp }}/smoke/*.json
+            ${{ runner.temp }}/smoke/*/crest.out
+          retention-days: 30
+
+  compare:
+    name: compare Windows with Linux
+    needs: [windows, linux]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.CREST_REPO }}
+          ref: ${{ env.CREST_REF }}
+          sparse-checkout: .github/qb
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: smoke-*
+          path: smoke
+
+      - name: Compare
+        run: |
+          ls -R smoke | head -50
+          rc=0
+          for link in static shared; do
+            f="smoke/smoke-windows-$link/smoke-windows-$link.json"
+            [ -f "$f" ] || { echo "no $f"; rc=1; continue; }
+            echo "## Windows ($link) vs Linux" >> "$GITHUB_STEP_SUMMARY"
+            python3 -I .github/qb/compare.py smoke/smoke-linux/smoke-linux.json "$f" --md "cmp-$link.md" || rc=1
+            cat "cmp-$link.md" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit $rc

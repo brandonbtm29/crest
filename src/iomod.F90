@@ -25,8 +25,13 @@ module iomod
   implicit none
   public
 
+  !> On Windows (MinGW-w64) the POSIX calls below are provided by win_compat.c
   interface
+#ifdef _WIN32
+    function mkdir(path,mode) bind(c,name="crest_win_mkdir")
+#else
     function mkdir(path,mode) bind(c,name="mkdir")
+#endif
       use iso_c_binding
       integer(c_int) :: mkdir
       character(kind=c_char,len=1) :: path(*)
@@ -35,7 +40,11 @@ module iomod
   end interface
 
   interface
+#ifdef _WIN32
+    integer(kind=c_int) function c_setenv(c_name,c_VALUE) bind(c,name="crest_win_setenv")
+#else
     integer(kind=c_int) function c_setenv(c_name,c_VALUE) bind(c,name="setenv")
+#endif
       use iso_c_binding
       character(kind=c_char)   :: c_name(*)
       character(kind=c_char)   :: c_VALUE(*)
@@ -48,7 +57,11 @@ module iomod
   end interface setenv
 
   interface
+#ifdef _WIN32
+    integer(kind=c_int) function c_symlink(c_from,c_to) bind(c,name="crest_win_symlink")
+#else
     integer(kind=c_int) function c_symlink(c_from,c_to) bind(c,name="symlink")
+#endif
       use iso_c_binding
       character(kind=c_char)   :: c_from(*)
       character(kind=c_char)   :: c_to(*)
@@ -97,7 +110,11 @@ module iomod
   end interface to_str
 
   interface
+#ifdef _WIN32
+    function c_realpath(source_ptr,resolved_ptr) bind(c,name="crest_win_realpath")
+#else
     function c_realpath(source_ptr,resolved_ptr) bind(c,name="realpath")
+#endif
       use iso_c_binding
       implicit none
       type(c_ptr) :: c_realpath  !> function returns a pointer to char
@@ -107,6 +124,16 @@ module iomod
       type(c_ptr),value :: resolved_ptr
     end function c_realpath
   end interface
+
+#ifdef _WIN32
+  interface
+    !> runs a POSIX-style command line on Windows (win_compat.c)
+    integer(kind=c_int) function crest_win_command(c_cmd) bind(c,name="crest_win_command")
+      use iso_c_binding
+      character(kind=c_char)   :: c_cmd(*)
+    end function crest_win_command
+  end interface
+#endif
 
   public :: checkprog
   public :: checkprog_silent
@@ -1176,7 +1203,11 @@ contains !> MODULE PROCEDURES START HERE
     character(len=*),intent(in) :: cmd
     integer,intent(out),optional :: exitstat
     integer :: io
-#ifdef __INTEL_COMPILER
+#if defined(_WIN32)
+    !> No POSIX shell on Windows: rm, cp, mv, mkdir and "command -v" run natively, anything
+    !> else goes to cmd.exe with /dev/null -> NUL and "cd DIR &&" -> "cd /d DIR &&"
+    io = crest_win_command(trim(cmd)//c_null_char)
+#elif defined(__INTEL_COMPILER)
     call execute_command_line(trim(cmd),exitstat=io)
 #else
     call system(trim(cmd),io)

@@ -119,6 +119,12 @@ set(prog)
 set(srcs)
 add_subdirectory("src")
 
+# gfortran does not predefine the target's OS macros (C compilers and Intel Fortran define _WIN32
+# themselves); CREST's Windows code paths in preprocessed Fortran sources test _WIN32
+if(WIN32 AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set_property(SOURCE ${srcs} ${prog} APPEND PROPERTY COMPILE_DEFINITIONS "_WIN32")
+endif()
+
 
 if(NOT EXISTS "${PROJECT_BINARY_DIR}/include")
    file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/include")
@@ -299,6 +305,22 @@ target_include_directories(
    ${PROJECT_SOURCE_DIR}/include
    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
 )
+
+# Windows (MinGW-w64, see docs/WINDOWS.md):
+# - CREST relies on POSIX rename(), which replaces an existing target; the Windows CRT's refuses.
+#   gfortran's RENAME intrinsic calls rename() inside libgfortran, so libgfortran is linked
+#   statically and its rename() is redirected to the replacing version in src/win_compat.c.
+# - The main thread gets a larger stack than the 1 MiB Windows default (CREST is run with
+#   "ulimit -s unlimited" on Linux). This reserves address space, it does not commit memory.
+if(WIN32 AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+  set(CREST_WINDOWS_STACK "1073741824" CACHE STRING "Main-thread stack reserve in bytes on Windows")
+  set(crest_windows_link_options
+    "-static-libgfortran"
+    "-Wl,--wrap=rename"
+    "-Wl,--stack,${CREST_WINDOWS_STACK}"
+  )
+  target_link_options(${PROJECT_NAME}-exe PRIVATE ${crest_windows_link_options})
+endif()
 
 
 ###############################################################################

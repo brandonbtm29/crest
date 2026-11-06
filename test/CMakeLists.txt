@@ -29,6 +29,9 @@ target_link_libraries(
   "lib-${PROJECT_NAME}-static"
   "test-drive::test-drive"
 )
+if(DEFINED crest_windows_link_options)
+  target_link_options("${PROJECT_NAME}-tester" PRIVATE ${crest_windows_link_options})
+endif()
 
 foreach(t IN LISTS tests)
   add_test("${PROJECT_NAME}/${t}" "${PROJECT_NAME}-tester" "${t}")
