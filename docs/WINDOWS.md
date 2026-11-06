@@ -1,9 +1,10 @@
 # CREST on native Windows (fork `brandonbtm29/crest`, branch `qb/windows`)
 
 This branch builds CREST as a native Windows program (`crest.exe`, x86-64) with the MSYS2 UCRT64
-MinGW-w64 toolchain (gcc/gfortran) and OpenBLAS. Linux and macOS builds are unchanged: every change
-below is behind `_WIN32` (C, preprocessed Fortran) or `if(WIN32)` / `host_machine.system() == 'windows'`
-(CMake, meson).
+MinGW-w64 toolchain (gcc/gfortran) and OpenBLAS. Linux and macOS behave as before: the Windows code is
+behind `_WIN32` (C, preprocessed Fortran) or `if(WIN32)` / `host_machine.system() == 'windows'` (CMake,
+meson). The only changes that reach them are commas in 11 format strings (needed by gfortran 15+) and a
+`close` of a unit left open, neither of which changes the output.
 
 Upstream does not support Windows (crest-lab/crest issues #276 and #307, closed as not planned; a
 maintainer noted that some functions, such as QCG, run shell commands, and that CMake is preferred over
@@ -156,8 +157,56 @@ QuantaBench does.
 
 ## Results
 
-(filled in from CI runs)
+CI run [42260268137](https://github.com/brandonbtm29/crest/actions/runs/42260268137) (commit `856b9be`):
+MSYS2 UCRT64 gcc/gfortran 16.2.0, OpenBLAS 0.3.34, CMake 4.4, Release (`-O3`); Linux reference on
+ubuntu-latest (26.04) with gfortran 15.2 and OpenBLAS. Smoke cases (`.github/qb/smoke.py`, 2 threads):
+
+| Case | Linux | Windows static | Windows shared |
+|---|---|---|---|
+| `--sp --gfn2 --alpb water` (butanol) | -17.7257864996 Eh | -17.7257864996 | -17.7257864996 |
+| `--sp --gfnff` (PFBA) | -1.9343648178 | -1.9343648178 | -1.9343648178 |
+| `--ancopt --gfn2 --alpb water` (PFBA) | -50.3240491673 | -50.3240491675 | -50.3240491674 |
+| iMTD-GC `--gfnff` (butanol): conformers, lowest | 15, -2.11067924 | 14, -2.11067924 | 15, -2.11067924 |
+| iMTD-GC `--gfn2 --alpb water --quick` (PFBA) | 19, -50.3240537 | 25, -50.3240412 | 23, -50.3240194 |
+| legacy `--gfn2//gfnff --legacy --alpb water --quick` (butanol, xtb 6.7.1) | 22, -17.7284423 | 20, -17.7284569 | 21, -17.7284594 |
+
+- Single points and optimizations agree to 2e-10 Eh. The conformer searches find the same lowest
+  conformer to 1e-5 to 3e-5 Eh (0.01-0.02 kcal/mol); their conformer counts change from run to run on
+  the same platform too (Linux gave 14 and 15 for butanol, 19 to 23 for PFBA in four runs), because the
+  MTD trajectories depend on thread timing.
+- After each run the job folders hold the same files on Windows and Linux (the native `rm` cleans up
+  `METADYN*`, `NORMMD*`, `calculation.level.*`, `.cre_*`, `TRIALMD`, ...).
+- The static `crest.exe` imports only `KERNEL32.dll` and the UCRT (`api-ms-win-crt-*`): one 48 MB
+  file (stripped; OpenBLAS's kernels for every CPU make up most of it).
+- Wall times on the hosted runners vary by 2x between runs; legacy mode is about 2x slower on Windows
+  than on Linux (it starts cmd.exe + xtb.exe for every MD and optimization).
+
+BTM NOVA (Ryzen 9 7900X, Windows 11), the static `crest.exe` of run 42255766640, 2 threads:
+the same smoke cases give identical single-point/optimization energies; iMTD-GC GFN-FF butanol 15
+conformers in 16.5 s, GFN2/ALPB PFBA `--quick` 24 conformers in 61.8 s (lowest -50.32406431 Eh).
+QuantaBench's CREST engine (`chem/crest.py`, unchanged) runs it when given by `QUANTABENCH_CREST`:
+butanol GFN-FF 14 conformers in 3.1 s, PFBA GFN2/ALPB(water) 17 conformers in 60.9 s (QuantaBench's
+`OMP_STACKSIZE=4G`), and its cancel stops `crest.exe` within the poll interval.
+
+Unit tests (`ctest -R crest/`, run as upstream's CI does with `OMP_NUM_THREADS=1,2,1`): CN, gfn0 and
+gfn0occ pass; tblite, gfnff and optimization stop with a segmentation fault at their first calculation
+in both Windows builds. All of them pass with `OMP_NUM_THREADS=1`, and they also pass with `1,2,1` when the
+program runs under gdb (with or without the debug heap), so the crash needs the nested thread-count
+list and real timing (run [42262431070](https://github.com/brandonbtm29/crest/actions/runs/42262431070)).
+`crest.exe` itself only gets a single thread count (QuantaBench sets one), and its own nested
+parallelism works: on NOVA, `--mdopt` of 2- and 3-structure ensembles with `-T 4` (2 jobs x 2 threads,
+`omp_set_max_active_levels(2)`, tblite's parallel regions inside) terminated normally 9 times out of 9.
+Open, see below.
 
 ## Remaining work
 
-(see below)
+| Item | Effort |
+|---|---|
+| The unit-test crash with `OMP_NUM_THREADS=1,2,1` outside a debugger (above): a libgomp/winpthreads or tblite nested-region problem; reproduce in a small program, then report upstream | 0.5-1 day |
+| A release with the static `crest.exe` (zip with the notices), then QuantaBench: download it in `install_windows.ps1`, pin it in `fork-packages.json`, change the CREST install hint ("no Windows build: use WSL") | 0.5 day |
+| `OMP_STACKSIZE`: winpthreads commits (not only reserves) a thread's stack, so QuantaBench's default 4G per thread costs commit charge on Windows; fine at 2 threads, check at 12 or lower it for native CREST | 1-2 h |
+| Test the other run modes that use external programs through the cmd.exe translation: QCG (xtb, xtbiff), `--legacy` run types other than `-gfn2//gfnff`, the xtb/ORCA subprocess calculators, `--thermo`, property modes | 0.5-1 day |
+| Port what is left: `--scratch` (`mktemp`, `scp`), ConfSolv (`nohup ... &`, `lsof`), MSREACT and the deprecated modes (`execute_command_line` directly) | 1 day |
+| Paths with spaces: CREST never quotes paths in its command lines (all platforms); a job folder or xtb path with a space breaks the legacy modes | 2-4 h |
+| Upstream: the format-string commas and the `gettime` `close` are platform-independent fixes worth a small PR on their own; the Windows port could follow (upstream has declined Windows so far) | 0.5 day |
+| macOS: nothing needed (upstream CI and conda-forge build it); a macOS job here only if the Mac should run exactly this branch | 2 h |
