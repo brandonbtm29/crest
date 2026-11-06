@@ -57,6 +57,8 @@ imports LLVM's `libomp`.
 | `_WIN32` in Fortran | gfortran does not predefine OS macros (C compilers and Intel Fortran do) | CMake/meson define `_WIN32` for CREST's own Fortran sources on Windows (not for subprojects) |
 | Main-thread stack | Windows reserves 1 MiB for the main thread; CREST is run with `ulimit -s unlimited` on Linux (QuantaBench's wrapper does this) | `-Wl,--stack,1073741824` (1 GiB reserve, `CREST_WINDOWS_STACK`); OpenMP worker threads use `OMP_STACKSIZE` as everywhere |
 | `rename()` | see 3 | `-static-libgfortran -Wl,--wrap=rename` |
+| `KILL` intrinsic | libgfortran has no `KILL` on Windows: the link fails (`_gfortran_kill_sub`, used by ConfSolv's shutdown) | `cs_kill` in `algos/ConfSolv.F90`: `taskkill /F /T /PID` on Windows, `kill(pid, 9)` elsewhere |
+| Format strings | 11 formats lack a comma between descriptors (e.g. `'(1x,"("f7.2"%)")'` in ANCOPT/RFO); gfortran 15 and 16 (Ubuntu 26.04, MSYS2) stop at run time with "Missing comma between descriptors", so `--ancopt` fails on Linux too | commas added (no change in output) |
 
 ### 2. POSIX C calls bound from Fortran (`src/iomod.F90`)
 
@@ -105,7 +107,7 @@ Where the commands come from:
 | subprocess calculators (`calculator/xtb_sc.f90`, `orca_sc`, `turbom_sc`, `generic_sc`) | `cd calcspace && BINARY ... > out 2>/dev/null` | TOML input with `type = "xtb"`, `"orca"`, ... | via cmd.exe translation (untested) |
 | QCG (`qcg/solvtool*.f90`) | xtb/xtbiff runs, `cd DIR && ...`, `> out 2> /dev/null` | `--qcg` | via cmd.exe translation (untested; needs xtb, optionally xtbiff) |
 | `scratch.f90` | `mktemp -d`, `scp -r ./* DIR/` | `--scratch` | not ported |
-| `algos/ConfSolv.F90` | `nohup ... &`, `lsof`, `kill -9` | ConfSolv | not ported |
+| `algos/ConfSolv.F90` | `nohup ... &`, `lsof`, `kill -9` | ConfSolv | not ported (only its `KILL` call, so that CREST links) |
 | `entropy/thermocalc.f90`, `propcalc.f90` | `cd DIR && xtb ...` | `--thermo`, property modes | via cmd.exe translation (untested) |
 | `msreact/msmod.f90`, `deprecated/*` | `execute_command_line` with xtb | `--msreact`, deprecated modes | not ported (bypasses `command()`) |
 | `legacy_algos/confscript2_misc.f90:366`, `normmd.f90:461` | `cp -r DIR FAILED-MTD` | failure path only | first is `system()` (fails harmlessly), second native |
@@ -133,6 +135,9 @@ QuantaBench does.
 - `src/win_compat.c` (new): the Windows replacements above; compiles to nothing elsewhere.
 - `src/iomod.F90`: on `_WIN32`, the C bindings point at `crest_win_*` and `command()` calls
   `crest_win_command()`.
+- `src/algos/ConfSolv.F90`: `cs_kill` instead of the `KILL` intrinsic.
+- `src/optimize/ancopt.f90`, `rfo.f90`, `printouts.f90`, `algos/search_mecp.f90`,
+  `parsing/parse_keyvalue.f90`: missing commas in format strings (gfortran >= 15, all platforms).
 - `CMakeLists.txt`: `_WIN32` for CREST's Fortran sources with gfortran on Windows; link options
   `-static-libgfortran -Wl,--wrap=rename -Wl,--stack,<CREST_WINDOWS_STACK>` for `crest.exe` (and
   `test/CMakeLists.txt`: the unit-test program).

@@ -611,7 +611,7 @@ contains !> MODULE PROCEDURES START HERE
     character(len=25) :: abbrval
     character(len=20) :: abbrkey
     character(len=*),parameter :: outfmt = &
-    & '(1x,"key:",1x,a20,"value:"1x,a25,"type:",1x,a)'
+    & '(1x,"key:",1x,a20,"value:",1x,a25,"type:",1x,a)'
 
     atmp = ''
     print_kv = atmp

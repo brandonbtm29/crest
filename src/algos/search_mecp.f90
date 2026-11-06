@@ -139,7 +139,7 @@ subroutine print_gapcons(calc)
     select case (t)
     case (-1)
       ex = .true.
-      write (stdout,'(1x,a1x,"[",a,"]")') 'nonadiabatic gap constraint','σ*ΔE²/(ΔE+α)'
+      write (stdout,'(1x,a,1x,"[",a,"]")') 'nonadiabatic gap constraint','σ*ΔE²/(ΔE+α)'
       write (stdout,'(" σ=",f8.5," α=",f8.5)') calc%cons(i)%fc(1:2)
     case (-2)
       ex = .true.
