@@ -127,3 +127,20 @@ a 2-core x86-64 Linux container). Searches: conformers and lowest energy (Eh); c
 - Legacy mode and `--tautomerize` took longer on the Mac than on 2 Linux cores. Legacy mode starts one xtb
   process per structure (306 final optimizations here); macOS starts processes more slowly. Worth a closer look
   only if QuantaBench uses `gfn2//gfnff` on the Mac in bulk.
+
+### Through QuantaBench: 20 PFAS (2026-11-06)
+
+QuantaBench's CREST benchmark set (10 ions, 10 neutrals, 7 to 54 heavy atoms), iMTD-GC `--quick --ewin 6`,
+refined with GFN2-xTB, 6 lanes x 2 threads on the MacBook, against NOVA's WSL (conda-forge's linux-64 3.0.2,
+20 lanes x 2 threads). QuantaBench's `Runs/crest-2026-11-06/mac-fixed`, details in its docs/ENGINES.md (CREST).
+
+| GFN-FF | MacBook, this build | NOVA WSL, conda-forge 3.0.2 |
+|---|---|---|
+| gas: CREST ran to the end | 20/20 (conda-forge's osx-arm64 build: 2/20) | 20/20 |
+| gas: wall; CREST summed; slowest molecule | 3,108 s; 8,961 s; 3,079 s | 1,247 s; 5,038 s; 1,195 s |
+| water (ALPB): CREST ran to the end; wall | 20/20; 5,222 s (15 min of it asleep) | 20/20; 5,982 s |
+| gas: same lowest conformer (symmetric RMSD, common level GFN2 opt) | 15/20 | |
+| gas: best energy within 0.1 kcal/mol | 12/20 (median -0.005 kcal/mol) | |
+
+The rest is sampling (each side missed two of the other's lowest conformers). GFN2 runs and lane timing were
+still running when this was written.
